@@ -15,7 +15,7 @@ MODEL_NAME = 'model.ckpt'
 class WDGRL():
     def __init__(self, l2 = 0.001, learning_rate = 0.01, batch_size = 128, D_train_steps = 20, training_steps = 5000,
                  optimizer = 'GD', input_dim = 500, middle_dim = 100, new_dim = 50,
-                 save_step = 100, print_step = 20, wd_param = 0.0005, gp_param = 10,
+                 save_step = 100, print_step = 20, wd_param = 0.005, gp_param = 1,
                  learning_rate_wd = 1e-4, n_classes = 10):
         """
         
@@ -71,24 +71,37 @@ class WDGRL():
             slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=[1]))
             gradient_penalty = tf.reduce_mean((slopes - 1.) ** 2)
 
-            # theta_C = [v for v in tf.global_variables() if 'classifier' in v.name]
-            # theta_D = [v for v in tf.global_variables() if 'critic' in v.name]
-            # theta_G = [v for v in tf.global_variables() if 'generator' in v.name]
+            theta_C = [v for v in tf.global_variables() if 'classifier' in v.name]
+            theta_D = [v for v in tf.global_variables() if 'critic' in v.name]
+            theta_G = [v for v in tf.global_variables() if 'generator' in v.name]
 
-            # 训练分辨器wd_loss<0,梯度上升, 提升领域区分能力
-            wd_d_op = tf.train.AdamOptimizer(self.learning_rate_wd).minimize(-wd_loss +
-                                                                             self.wd_param * gradient_penalty,
-                                                                             # var_list=theta_D)
-                                                                             )
+            # 训练分辨器wd_loss梯度上升, 提升领域区分能力
+
+            if self.optimizer == 'GD':
+                wd_d_op = tf.train.GradientDescentOptimizer(self.learning_rate_wd).minimize(-wd_loss +
+                                                                                 self.gp_param * gradient_penalty,
+                                                                                 var_list=theta_D)
+                                                                                 # )
+            else:
+                wd_d_op = tf.train.GradientDescentOptimizer(self.learning_rate_wd).minimize(-wd_loss +
+                                                                                            self.gp_param * gradient_penalty,
+                                                                                            var_list=theta_D)
+                                                                                            # )
             all_variables = tf.trainable_variables()
             l2_loss = self.l2 * tf.add_n([tf.nn.l2_loss(v) for v in all_variables if 'bias' not in v.name])
             total_loss = clf_loss + l2_loss + self.wd_param * wd_loss
-
+            print([v.name for v in tf.global_variables()])
             # 训练生成器wd_loss，梯度下降, 提升领域相似性
-            train_op = tf.train.AdamOptimizer(self.learning_rate).minimize(total_loss,
-                                                                           global_step=global_step
-                                                                           # var_list=theta_G + theta_C)
-                                                                           )
+            if self.optimizer == 'GD':
+                train_op = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(total_loss,
+                                                                               global_step=global_step,
+                                                                               var_list=theta_G + theta_C)
+                                                                               # )
+            else:
+                train_op = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(total_loss,
+                                                                                          global_step=global_step,
+                                                                                          var_list=theta_G + theta_C)
+                                                                                          # )
             saver = tf.train.Saver()
             with tf.Session() as sess:
                 tf.global_variables_initializer().run()
@@ -100,7 +113,8 @@ class WDGRL():
                                                      X_tar_placeholder: xt,
                                                      y_src_placeholder: ys})
 
-                    _, wd_loss_, clf_loss_ = sess.run([train_op, wd_loss, clf_loss], feed_dict={X_src_placeholder: xs, X_tar_placeholder: xt,
+                    _, wd_loss_, clf_loss_ = sess.run([train_op, wd_loss, clf_loss], feed_dict={X_src_placeholder: xs,
+                                                                                                X_tar_placeholder: xt,
                                               y_src_placeholder: ys})
                     if i%self.print_step == 0:
                         print("After {} training steps\nwd_loss:{} clf_loss:{}".format(i, wd_loss_, clf_loss_))
@@ -138,9 +152,9 @@ class WDGRL():
         :param h_tar: 
         :return: 
         """
-        with tf.name_scope('critic'):
-            weights_d = tf.get_variable("weights_d", shape=[self.new_dim, 1])
-            biases_d = tf.get_variable("biases_d", shape=[1])
+        with tf.variable_scope('critic'):
+            weights_d = tf.get_variable(name="weights_d", shape=[self.new_dim, 1])
+            biases_d = tf.get_variable(name="biases_d", shape=[1])
             alpha = tf.random_uniform(shape=[self.batch_size, 1], minval=0., maxval=1.)
             differences = h_src - h_tar
             interpolates = h_tar + (alpha * differences)
@@ -157,7 +171,7 @@ class WDGRL():
         :param h_src: 
         :return: 
         """
-        with tf.name_scope('classifier'):
+        with tf.variable_scope('classifier'):
             weights = tf.get_variable("weights", shape = [self.new_dim, self.n_classes],
                                       initializer=tf.truncated_normal_initializer(stddev=1))
             biases = tf.get_variable("biases", shape = [self.n_classes],
@@ -178,7 +192,7 @@ class WDGRL():
         if X_tar is None:
             raise TypeError("X_tar shouldn't be None.")
 
-        with tf.name_scope("layer1"):
+        with tf.variable_scope("generator"):
             weights_1 = tf.get_variable("weights_1", shape=[self.input_dim, self.middle_dim],
                                         initializer=tf.truncated_normal_initializer(stddev=1))
             bias_1 = tf.get_variable("bias_1", shape=[self.middle_dim],
