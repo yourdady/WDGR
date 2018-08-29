@@ -6,6 +6,7 @@
 '''
 import tensorflow as tf
 import numpy as np
+import matplotlib.pyplot as plt
 import os
 
 MODEL_SAVE_PATH = './model'
@@ -15,7 +16,7 @@ MODEL_NAME = 'model.ckpt'
 class WDGRL():
     def __init__(self, l2 = 0.001, learning_rate = 0.01, batch_size = 128, D_train_steps = 20, training_steps = 5000,
                  optimizer = 'GD', input_dim = 500, middle_dim = 100, new_dim = 50,
-                 save_step = 100, print_step = 20, wd_param = 0.005, gp_param = 1,
+                 save_step = 100, print_step = 20, wd_param = 0.05, gp_param = 1,
                  learning_rate_wd = 1e-4, n_classes = 10):
         """
         
@@ -51,8 +52,15 @@ class WDGRL():
         self.new_dim = new_dim
         self.n_classes = n_classes
 
-    def fit(self, data_src, data_tar):
+    def fit(self, data_src, data_tar, draw_plot=False):
         with tf.Graph().as_default() as g:
+            clf_losses = None
+            wd_losses = None
+            iterations = None
+            if draw_plot == True:
+                clf_losses = []
+                wd_losses = []
+                iterations = []
             global_step = tf.Variable(0, trainable=False)
             X_src_placeholder = tf.placeholder(shape=[self.batch_size, self.input_dim],
                                                dtype=tf.float32, name='Xsrc')
@@ -113,14 +121,21 @@ class WDGRL():
                                                      X_tar_placeholder: xt,
                                                      y_src_placeholder: ys})
 
+
                     _, wd_loss_, clf_loss_ = sess.run([train_op, wd_loss, clf_loss], feed_dict={X_src_placeholder: xs,
                                                                                                 X_tar_placeholder: xt,
                                               y_src_placeholder: ys})
+                    if draw_plot == True:
+                        clf_losses.append(clf_loss_)
+                        wd_losses.append(wd_loss_)
+                        iterations.append(i)
+
                     if i%self.print_step == 0:
                         print("After {} training steps\nwd_loss:{} clf_loss:{}".format(i, wd_loss_, clf_loss_))
                     if i%self.save_step == 0:
                         saver.save(sess, os.path.join(MODEL_SAVE_PATH, MODEL_NAME), global_step=global_step)
-
+                if draw_plot == True:
+                    self.draw_plot(iterations, clf_loss=clf_losses, wd_loss=wd_losses)
 
 
     def transform(self, X):
@@ -131,7 +146,7 @@ class WDGRL():
         """
         with tf.Graph().as_default() as g:
             x = tf.placeholder(tf.float32, [
-                -1,
+                None,
                 self.input_dim],name='x-input')
             _, h_t = self.wdgrl_generator(X_tar=x)
             saver = tf.train.Saver()
@@ -180,6 +195,7 @@ class WDGRL():
 
         return pred_logits
 
+
     def wdgrl_generator(self, X_src=None, X_tar=None):
         """
         
@@ -215,9 +231,24 @@ class WDGRL():
         return h_s, h_t
 
 
+    def draw_plot(self, iter, clf_loss, wd_loss):
+        fig = plt.figure(figsize=(8, 4))
+        ax1 = fig.add_subplot(111)
+        p1, = ax1.plot(iter, np.array(wd_loss)/max(wd_loss), 'b-', label='wd_loss')
+        ax1.set_ylabel('WASSERSTEIN DISTANCE')
+        ax1.set_title("Iters")
+        ax1.yaxis.label.set_color(p1.get_color())
+        ax2 = ax1.twinx()
+        p2, = ax2.plot(iter, np.array(clf_loss)/max(clf_loss), 'g--', label='src loss')
+        ax2.set_ylabel("SRC TRAINING LOSS")
+        ax2.yaxis.label.set_color(p2.get_color())
+        plt.savefig('./demo.png')
+        plt.show()
+
     ###############################################################################
     # Helper functions
     ################################################################################
 
     def _fully_connected(self, input_layer, weights, biases):
         return tf.add(tf.matmul(input_layer, weights), biases)
+
